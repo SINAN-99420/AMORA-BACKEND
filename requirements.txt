@@ -9,7 +9,9 @@ django-nested-admin==4.1.6
 djangorestframework==3.17.1
 djangorestframework_simplejwt==5.5.1
 google-auth==2.56.0
+gunicorn==26.0.0
 idna==3.18
+packaging==26.2
 pillow==12.3.0
 pyasn1==0.6.4
 pyasn1_modules==0.4.2
