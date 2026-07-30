@@ -186,12 +186,12 @@ def create_checkout_session(request):
         line_items=line_items,
 
         success_url=(
-            "http://localhost:5173/payment-success"
+            "http://www.amora.nz/payment-success"
             "?session_id={CHECKOUT_SESSION_ID}"
         ),
 
         cancel_url=(
-            "http://localhost:5173/payment-cancel"
+            "http://www.amora.nz/payment-cancel"
         ),
     )
 
