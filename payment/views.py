@@ -15,7 +15,7 @@ from myapp.models import (
     Cart,
     Address,
     Order,
-    OrderItem,
+    OrderItem
 )
 
 from myapp.utils import (
@@ -25,7 +25,6 @@ from myapp.utils import (
 )
 
 from .services import StripeService
-
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -61,13 +60,16 @@ def create_checkout_session(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    cart_items = Cart.objects.filter(
-        user=request.user
-    ).select_related(
-        "variant",
-        "variant__product",
-        "variant__product__offer",
-        "variant_size",
+    cart_items = (
+        Cart.objects.filter(
+            user=request.user
+        )
+        .select_related(
+            "variant",
+            "variant__product",
+            "variant__product__offer",
+            "variant_size",
+        )
     )
 
     if not cart_items.exists():
@@ -87,7 +89,6 @@ def create_checkout_session(request):
 
     for item in cart_items:
 
-        # Stock Check Before Payment
         if item.variant_size.stock < item.quantity:
 
             return Response(
@@ -106,15 +107,18 @@ def create_checkout_session(request):
             item.variant.product.offer
         )
 
-        discount += (
-            calculate_discount_amount(
-                original_price,
-                item.variant.product.offer
-            ) * item.quantity
+        discount_amount = calculate_discount_amount(
+            original_price,
+            item.variant.product.offer
         )
 
         subtotal += (
             offer_price *
+            item.quantity
+        )
+
+        discount += (
+            discount_amount *
             item.quantity
         )
 
@@ -125,12 +129,15 @@ def create_checkout_session(request):
                     "currency": "nzd",
 
                     "product_data": {
+
                         "name": item.variant.product.name,
+
                     },
 
                     "unit_amount": int(
                         offer_price * 100
                     ),
+
                 },
 
                 "quantity": item.quantity,
@@ -150,63 +157,60 @@ def create_checkout_session(request):
                     "currency": "nzd",
 
                     "product_data": {
+
                         "name": "Shipping",
+
                     },
 
                     "unit_amount": int(
                         totals["shipping"] * 100
                     ),
+
                 },
 
                 "quantity": 1,
             }
         )
 
-    order = Order.objects.create(
-
-        user=request.user,
-
-        address=address,
-
-        subtotal=totals["subtotal"],
-
-        shipping_charge=totals["shipping"],
-
-        discount_amount=discount,
-
-        total_amount=totals["total"],
-
-        payment_status="Pending",
-
-        status="Pending",
-    )
-
     session = StripeService.create_checkout_session(
 
         line_items=line_items,
 
         success_url=(
-            "http://www.amora.nz/payment-success"
+            "https://www.amora.nz/payment-success"
             "?session_id={CHECKOUT_SESSION_ID}"
         ),
 
         cancel_url=(
-            "http://www.amora.nz/payment-cancel"
+            "https://www.amora.nz/payment-cancel"
         ),
+
+        metadata={
+
+            "user_id": str(request.user.id),
+
+            "address_id": str(address.id),
+
+        }
+
     )
-
-    order.stripe_session_id = session.id
-
-    order.save()
 
     return Response(
+
         {
-            "checkout_url": session.url,
+
+            "checkout_url": session.url
+
         }
+
     )
+    
+from django.db import transaction
+
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
+@transaction.atomic
 def payment_success(request):
 
     session_id = request.GET.get("session_id")
@@ -235,22 +239,6 @@ def payment_success(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    try:
-
-        order = Order.objects.get(
-            stripe_session_id=session.id,
-            user=request.user
-        )
-
-    except Order.DoesNotExist:
-
-        return Response(
-            {
-                "message": "Order not found"
-            },
-            status=status.HTTP_404_NOT_FOUND
-        )
-
     if session.payment_status != "paid":
 
         return Response(
@@ -260,8 +248,13 @@ def payment_success(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    # Prevent duplicate processing
-    if order.payment_status == "Paid":
+    # Prevent duplicate order creation
+
+    existing_order = Order.objects.filter(
+        stripe_session_id=session.id
+    ).first()
+
+    if existing_order:
 
         return Response(
             {
@@ -269,29 +262,134 @@ def payment_success(request):
             }
         )
 
-    cart_items = Cart.objects.filter(
-        user=request.user
-    ).select_related(
-        "variant",
-        "variant__product",
-        "variant__product__offer",
-        "variant_size",
-        "variant_size__size",
+    user_id = session.metadata["user_id"]
+
+    address_id = session.metadata["address_id"]
+
+    if not user_id or not address_id:
+
+        return Response(
+            {
+                "message": "Session metadata missing"
+            },
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+
+        address = Address.objects.get(
+
+            id=address_id,
+
+            user_id=user_id
+
+        )
+
+    except Address.DoesNotExist:
+
+        return Response(
+            {
+                "message": "Address not found"
+            },
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    cart_items = (
+        Cart.objects
+        .filter(
+            user_id=user_id
+        )
+        .select_related(
+            "variant",
+            "variant__product",
+            "variant__product__offer",
+            "variant__color",
+            "variant_size",
+            "variant_size__size",
+        )
     )
 
     if not cart_items.exists():
 
-        order.payment_status = "Paid"
-
-        order.status = "Confirmed"
-
-        order.save()
-
         return Response(
             {
-                "message": "Payment successful"
-            }
+                "message": "Cart is empty"
+            },
+            status=status.HTTP_400_BAD_REQUEST
         )
+
+    original_subtotal = Decimal("0.00")
+
+    discount_total = Decimal("0.00")
+
+    discounted_subtotal = Decimal("0.00")
+
+    for item in cart_items:
+
+        if item.quantity > item.variant_size.stock:
+
+            return Response(
+                {
+                    "message":
+                    f"Only {item.variant_size.stock} item(s) left for {item.variant.product.name}"
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        original_price = Decimal(
+            str(item.variant_size.price)
+        )
+
+        discounted_price = calculate_offer_price(
+            original_price,
+            item.variant.product.offer
+        )
+
+        discount_amount = calculate_discount_amount(
+            original_price,
+            item.variant.product.offer
+        )
+
+        original_subtotal += (
+            original_price *
+            item.quantity
+        )
+
+        discount_total += (
+            discount_amount *
+            item.quantity
+        )
+
+        discounted_subtotal += (
+            discounted_price *
+            item.quantity
+        )
+
+    totals = calculate_order_total(
+        discounted_subtotal
+    )
+
+    order = Order.objects.create(
+
+        user_id=user_id,
+
+        address=address,
+
+        subtotal=original_subtotal,
+
+        discount_amount=discount_total,
+
+        shipping_charge=totals["shipping"],
+
+        total_amount=totals["total"],
+
+        payment_status="Paid",
+
+        status="Confirmed",
+
+        stripe_session_id=session.id,
+
+    )
 
     for item in cart_items:
 
@@ -299,7 +397,7 @@ def payment_success(request):
             str(item.variant_size.price)
         )
 
-        offer_price = calculate_offer_price(
+        discounted_price = calculate_offer_price(
             original_price,
             item.variant.product.offer
         )
@@ -327,25 +425,28 @@ def payment_success(request):
 
             discount_amount=discount_amount,
 
-            price=offer_price,
+            price=discounted_price,
 
-            total_price=offer_price * item.quantity,
+            total_price=(
+                discounted_price *
+                item.quantity
+            )
+
         )
 
         item.variant_size.stock -= item.quantity
 
         item.variant_size.save()
 
-    order.payment_status = "Paid"
-
-    order.status = "Confirmed"
-
-    order.save()
-
     cart_items.delete()
 
     return Response(
+
         {
-            "message": "Payment successful"
+
+            "message":
+            "Payment successful"
+
         }
+
     )

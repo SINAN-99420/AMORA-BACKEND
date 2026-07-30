@@ -11,14 +11,23 @@ class StripeService:
         line_items,
         success_url,
         cancel_url,
+        metadata=None,
     ):
 
         session = stripe.checkout.Session.create(
+
             payment_method_types=["card"],
+
             mode="payment",
+
             line_items=line_items,
+
             success_url=success_url,
+
             cancel_url=cancel_url,
+
+            metadata=metadata or {},
+
         )
 
         return session
