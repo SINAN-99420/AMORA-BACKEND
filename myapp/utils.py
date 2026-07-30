@@ -55,6 +55,9 @@ def calculate_discount_amount(price, offer):
 def calculate_shipping(subtotal):
 
     subtotal = Decimal(str(subtotal))
+    
+    if subtotal <= Decimal("0"):
+        return Decimal("0")
 
     shipping_rules = [
         (
