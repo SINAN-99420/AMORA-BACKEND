@@ -731,21 +731,58 @@ class HomeCategorySerializer(serializers.ModelSerializer):
             "image",
             "subcategories",
         ]
+        
+        
 class WishlistSerializer(serializers.ModelSerializer):
 
+    product = serializers.IntegerField(
+        source="variant.product.id",
+        read_only=True
+    )
+
+    variant = serializers.IntegerField(
+        source="variant.id",
+        read_only=True
+    )
+
+    variant_size = serializers.IntegerField(
+        source="variant_size.id",
+        read_only=True
+    )
+
     product_name = serializers.CharField(
-        source="product.name",
+        source="variant.product.name",
         read_only=True
     )
 
     category = serializers.CharField(
-        source="product.category.name",
+        source="variant.product.category.name",
+        read_only=True
+    )
+
+    color = serializers.CharField(
+        source="variant.color.name",
+        read_only=True
+    )
+
+    size = serializers.CharField(
+        source="variant_size.size.name",
+        read_only=True
+    )
+
+    stock = serializers.IntegerField(
+        source="variant_size.stock",
         read_only=True
     )
 
     product_image = serializers.SerializerMethodField()
 
-    starting_price = serializers.SerializerMethodField()
+    original_price = serializers.DecimalField(
+        source="variant_size.price",
+        max_digits=10,
+        decimal_places=2,
+        read_only=True
+    )
 
     discounted_price = serializers.SerializerMethodField()
 
@@ -762,10 +799,15 @@ class WishlistSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "product",
-            "category",
+            "variant",
+            "variant_size",
             "product_name",
+            "category",
+            "color",
+            "size",
+            "stock",
             "product_image",
-            "starting_price",
+            "original_price",
             "discounted_price",
             "discount_amount",
             "has_offer",
@@ -773,72 +815,60 @@ class WishlistSerializer(serializers.ModelSerializer):
             "created_at",
         ]
 
-    def get_product_image(
-        self,
-        obj
-    ):
+    def get_product_image(self, obj):
 
-        variant = obj.product.variants.first()
-
-        if not variant:
-
+        if not obj.variant:
             return None
 
-        image = variant.images.filter(
+        image = obj.variant.images.filter(
             is_primary=True
         ).first()
 
         if not image:
-
-            image = variant.images.first()
+            image = obj.variant.images.first()
 
         return image.image.url if image else None
 
-    def get_starting_price(
-        self,
-        obj
-    ):
+    def get_discounted_price(self, obj):
 
-        return get_product_prices(
-            obj.product
-        )["starting_price"]
+        if not obj.variant or not obj.variant_size:
+            return None
 
-    def get_discounted_price(
-        self,
-        obj
-    ):
+        return calculate_offer_price(
+            obj.variant_size.price,
+            obj.variant.product.offer
+        )
 
-        return get_product_prices(
-            obj.product
-        )["discounted_price"]
+    def get_discount_amount(self, obj):
 
-    def get_discount_amount(
-        self,
-        obj
-    ):
+        if not obj.variant or not obj.variant_size:
+            return 0
 
-        return get_product_prices(
-            obj.product
-        )["discount_amount"]
+        return calculate_discount_amount(
+            obj.variant_size.price,
+            obj.variant.product.offer
+        )
 
-    def get_has_offer(
-        self,
-        obj
-    ):
+    def get_has_offer(self, obj):
 
-        return get_product_prices(
-            obj.product
-        )["has_offer"]
+        if not obj.variant:
+            return False
 
-    def get_discount_percentage(
-        self,
-        obj
-    ):
+        return is_offer_valid(
+            obj.variant.product.offer
+        )
 
-        return get_product_prices(
-            obj.product
-        )["discount_percentage"]
-        
+    def get_discount_percentage(self, obj):
+
+        if not obj.variant:
+            return 0
+
+        if is_offer_valid(
+            obj.variant.product.offer
+        ):
+            return obj.variant.product.offer.discount_percentage
+
+        return 0
         
 class ProductSerializer(serializers.ModelSerializer):
 

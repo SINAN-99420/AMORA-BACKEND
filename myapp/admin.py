@@ -118,9 +118,16 @@ class WishlistAdmin(admin.ModelAdmin):
 
     list_display = (
         "user",
-        "product",
+        "get_product",
+        "variant",
+        "variant_size",
         "created_at"
     )
+
+    def get_product(self, obj):
+        return obj.variant.product.name
+
+    get_product.short_description = "Product"
 
 @admin.register(Cart)
 class CartAdmin(admin.ModelAdmin):

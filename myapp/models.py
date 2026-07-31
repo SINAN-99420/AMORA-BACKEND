@@ -166,22 +166,58 @@ class ProductImage(models.Model):
 
 class Wishlist(models.Model):
 
-    user = models.ForeignKey( User, on_delete=models.CASCADE)
-    product = models.ForeignKey(Product,on_delete=models.CASCADE, related_name="wishlist")
-    created_at = models.DateTimeField( auto_now_add=True )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE
+    )
+
+    variant = models.ForeignKey(
+    ProductVariant,
+    on_delete=models.CASCADE,
+    related_name="wishlist",
+    null=True,
+    blank=True
+    )
+
+    variant_size = models.ForeignKey(
+    ProductVariantSize,
+    on_delete=models.CASCADE,
+    related_name="wishlist",
+    null=True,
+    blank=True
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True
+    )
 
     class Meta:
         unique_together = (
             "user",
-            "product"
+            "variant_size"
         )
 
     def __str__(self):
-        return (
-            f"{self.user.email} - "
-            f"{self.product.name}"
+
+        color = (
+            self.variant.color.name
+            if self.variant.color
+            else ""
         )
 
+        size = (
+            self.variant_size.size.name
+            if self.variant_size.size
+            else ""
+        )
+
+        return (
+            f"{self.user.email} - "
+            f"{self.variant.product.name} - "
+            f"{color} - "
+            f"{size}"
+        )
+        
 class Cart(models.Model):
 
     user = models.ForeignKey( User, on_delete=models.CASCADE )

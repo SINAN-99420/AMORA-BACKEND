@@ -392,58 +392,92 @@ def get_subcategories(request):
 
     return Response( serializer.data )
 
-
-
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def add_to_wishlist(request):
 
     user = request.user
-    print(request.data)
-    
-    product_id = request.data.get("product")
 
-    if not product_id:
+    variant_id = request.data.get("variant")
+    variant_size_id = request.data.get("variant_size")
+
+    if not variant_id or not variant_size_id:
+
         return Response(
-            {"error": "Product id is required"},
+            {
+                "error": "Variant and variant size are required"
+            },
             status=400
         )
 
     try:
-        product = Product.objects.get(id=product_id)
-    except Product.DoesNotExist:
+
+        variant = ProductVariant.objects.get(
+            id=variant_id
+        )
+
+    except ProductVariant.DoesNotExist:
+
         return Response(
-            {"error": "Product not found"},
+            {
+                "error": "Variant not found"
+            },
+            status=404
+        )
+
+    try:
+
+        variant_size = ProductVariantSize.objects.get(
+            id=variant_size_id,
+            variant=variant
+        )
+
+    except ProductVariantSize.DoesNotExist:
+
+        return Response(
+            {
+                "error": "Variant size not found"
+            },
             status=404
         )
 
     wishlist, created = Wishlist.objects.get_or_create(
+
         user=user,
-        product=product
+        variant=variant,
+        variant_size=variant_size
+
     )
 
     if created:
 
         return Response(
             {
-                "message":
-                "Added to wishlist"
-            }
+                "message": "Added to wishlist"
+            },
+            status=201
         )
 
     return Response(
         {
-            "message":
-            "Already in wishlist"
-        }
+            "message": "Already in wishlist"
+        },
+        status=200
     )
- 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_wishlist(request):
 
     wishlist = Wishlist.objects.filter(
         user=request.user
+    ).select_related(
+        "variant",
+        "variant__product",
+        "variant__color",
+        "variant_size",
+        "variant_size__size",
+        "variant__product__category",
+        "variant__product__offer"
     )
 
     serializer = WishlistSerializer(
@@ -454,14 +488,9 @@ def get_wishlist(request):
     return Response(
         serializer.data
     )
-
-
 @api_view(["DELETE"])
 @permission_classes([IsAuthenticated])
-def remove_wishlist(
-    request,
-    id
-):
+def remove_wishlist(request, id):
 
     wishlist = Wishlist.objects.get(
         id=id,
@@ -472,8 +501,7 @@ def remove_wishlist(
 
     return Response(
         {
-            "message":
-            "Removed from wishlist"
+            "message": "Removed from wishlist"
         }
     )
 @api_view(["POST"])
