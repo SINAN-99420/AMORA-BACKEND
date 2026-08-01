@@ -174,15 +174,15 @@ def create_checkout_session(request):
 
     session = StripeService.create_checkout_session(
 
-        line_items=line_items,
+        line_items=line_items, 
 
         success_url=(
-            "http://localhost:5173/payment-success"
+            "https://www.amora.nz/payment-success"
             "?session_id={CHECKOUT_SESSION_ID}"
         ),
 
         cancel_url=(
-            "http://localhost:5173/payment-cancel"
+            "https://www.amora.nz/checkout"
         ),
 
         metadata={
