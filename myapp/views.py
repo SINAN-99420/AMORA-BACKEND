@@ -1848,7 +1848,6 @@ def update_order_status(request, id):
         }
     )
 
-
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def low_stock_products(request):
@@ -1864,6 +1863,8 @@ def low_stock_products(request):
 
     products = ProductVariantSize.objects.select_related(
         "variant__product",
+        "variant__color",
+        "variant__product__category",
         "size"
     ).filter(
         stock__lte=5
@@ -1881,16 +1882,29 @@ def low_stock_products(request):
 
             "product_name": item.variant.product.name,
 
-            "size": item.size.name if item.size else None,
+            "category": (
+                item.variant.product.category.name
+                if item.variant.product.category
+                else None
+            ),
+
+            "color": (
+                item.variant.color.name
+                if item.variant.color
+                else None
+            ),
+
+            "size": (
+                item.size.name
+                if item.size
+                else None
+            ),
 
             "stock": item.stock
 
         })
 
-    return Response(
-        data
-    )
-
+    return Response(data)
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -1955,7 +1969,6 @@ def export_orders_csv(request):
 
             order.total_amount,
 
-            order.payment_method,
 
             order.payment_status,
 
@@ -2184,7 +2197,8 @@ def update_order_status(request, id):
         "Pending",
         "Processing",
         "Shipped",
-        "Delivered"
+        "Delivered",
+        "Cancelled"
 
     ]
 
@@ -2210,18 +2224,35 @@ def update_order_status(request, id):
     
 from django.db.models import Count
 
-
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def wishlist_products(request):
 
-    products = Product.objects.annotate(
+    if not request.user.is_staff:
 
-        wishlist_count=Count("wishlist")
+        return Response(
+            {
+                "error": "Unauthorized"
+            },
+            status=403
+        )
+
+    variants = ProductVariant.objects.annotate(
+
+        wishlist_count=Count(
+            "wishlist",
+            distinct=True
+        )
 
     ).filter(
 
         wishlist_count__gt=0
+
+    ).select_related(
+
+        "product",
+        "product__category",
+        "color"
 
     ).order_by(
 
@@ -2231,43 +2262,52 @@ def wishlist_products(request):
 
     data = []
 
-    for product in products:
+    for variant in variants:
 
         image = None
 
-        variant = product.variants.first()
+        product_image = variant.images.filter(
+            is_primary=True
+        ).first()
 
-        if variant:
+        if not product_image:
 
-            product_image = variant.images.filter(
-                is_primary=True
-            ).first()
+            product_image = variant.images.first()
 
-            if not product_image:
+        if product_image:
 
-                product_image = variant.images.first()
-
-            if product_image:
-
-                image = request.build_absolute_uri(
-                    product_image.image.url
-                )
+            image = request.build_absolute_uri(
+                product_image.image.url
+            )
 
         data.append({
 
-            "product_id": product.id,
+            "variant_id": variant.id,
 
-            "product_name": product.name,
+            "product_id": variant.product.id,
+
+            "product_name": variant.product.name,
+
+            "color": (
+                variant.color.name
+                if variant.color
+                else None
+            ),
 
             "image": image,
 
-            "category": product.category.name,
+            "category": (
+                variant.product.category.name
+                if variant.product.category
+                else None
+            ),
 
-            "wishlist_count": product.wishlist_count
+            "wishlist_count": variant.wishlist_count
 
         })
 
     return Response(data)
+
 
 @api_view(["GET"])
 def get_hero_banners(request):
