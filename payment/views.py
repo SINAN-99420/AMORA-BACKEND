@@ -177,12 +177,12 @@ def create_checkout_session(request):
         line_items=line_items,
 
         success_url=(
-            "https://www.amora.nz/payment-success"
+            "http://localhost:5173/payment-success"
             "?session_id={CHECKOUT_SESSION_ID}"
         ),
 
         cancel_url=(
-            "https://www.amora.nz/payment-cancel"
+            "http://localhost:5173/payment-cancel"
         ),
 
         metadata={

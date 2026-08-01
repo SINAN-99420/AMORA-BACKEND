@@ -561,28 +561,37 @@ class OrderItemSerializer(
 
         ]
 
-    def get_product_image(
-        self,
-        obj
-    ):
+    def get_product_image( self, obj):
 
-        variant = obj.product.variants.first()
+        if not obj.product:
+            return None
 
-        if variant:
+        variant = None
 
-            image = variant.images.filter(
-                is_primary=True
+        if obj.color:
+
+            variant = obj.product.variants.filter(
+                color=obj.color
             ).first()
 
-            if image:
+        if not variant:
 
-                return image.image.url
+            variant = obj.product.variants.first()
+
+        if not variant:
+            return None
+
+        image = variant.images.filter(
+            is_primary=True
+        ).first()
+
+        if not image:
 
             image = variant.images.first()
 
-            if image:
+        if image:
 
-                return image.image.url
+            return image.image.url
 
         return None
 class OrderSerializer(
@@ -649,6 +658,12 @@ class OrderSerializer(
             "customer_name",
 
             "customer_email",
+
+            "subtotal",
+
+            "discount_amount",
+
+            "shipping_charge",
 
             "total_amount",
 
