@@ -1307,163 +1307,163 @@ from decimal import Decimal
 
 from django.db import transaction
 
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-@transaction.atomic
-def place_order(request):
+# @api_view(["POST"])
+# @permission_classes([IsAuthenticated])
+# @transaction.atomic
+# def place_order(request):
 
-    address_id = request.data.get(
-        "address"
-    )
+#     address_id = request.data.get(
+#         "address"
+#     )
 
-    try:
+#     try:
 
-        address = Address.objects.get(
-            id=address_id,
-            user=request.user
-        )
+#         address = Address.objects.get(
+#             id=address_id,
+#             user=request.user
+#         )
 
-    except Address.DoesNotExist:
+#     except Address.DoesNotExist:
 
-        return Response(
-            {
-                "message": "Address not found"
-            },
-            status=status.HTTP_404_NOT_FOUND
-        )
+#         return Response(
+#             {
+#                 "message": "Address not found"
+#             },
+#             status=status.HTTP_404_NOT_FOUND
+#         )
 
-    cart_items = Cart.objects.select_related(
-        "variant__product__offer",
-        "variant__color",
-        "variant_size__size",
-    ).filter(
-        user=request.user
-    )
+#     cart_items = Cart.objects.select_related(
+#         "variant__product__offer",
+#         "variant__color",
+#         "variant_size__size",
+#     ).filter(
+#         user=request.user
+#     )
 
-    if not cart_items.exists():
+#     if not cart_items.exists():
 
-        return Response(
-            {
-                "message": "Cart is empty"
-            },
-            status=status.HTTP_400_BAD_REQUEST
-        )
+#         return Response(
+#             {
+#                 "message": "Cart is empty"
+#             },
+#             status=status.HTTP_400_BAD_REQUEST
+#         )
 
-    subtotal = Decimal("0.00")
+#     subtotal = Decimal("0.00")
 
-    for item in cart_items:
+#     for item in cart_items:
 
-        if item.quantity > item.variant_size.stock:
+#         if item.quantity > item.variant_size.stock:
 
-            return Response(
-                {
-                    "message": (
-                        f"Only "
-                        f"{item.variant_size.stock} "
-                        f"items available for "
-                        f"{item.variant.product.name}"
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
+#             return Response(
+#                 {
+#                     "message": (
+#                         f"Only "
+#                         f"{item.variant_size.stock} "
+#                         f"items available for "
+#                         f"{item.variant.product.name}"
+#                     )
+#                 },
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
 
-        discounted_price = calculate_offer_price(
-            item.variant_size.price,
-            item.variant.product.offer
-        )
+#         discounted_price = calculate_offer_price(
+#             item.variant_size.price,
+#             item.variant.product.offer
+#         )
 
-        subtotal += (
-            discounted_price *
-            item.quantity
-        )
+#         subtotal += (
+#             discounted_price *
+#             item.quantity
+#         )
 
-    totals = calculate_order_total(
-        subtotal
-    )
+#     totals = calculate_order_total(
+#         subtotal
+#     )
 
-    order = Order.objects.create(
+#     order = Order.objects.create(
 
-        user=request.user,
+#         user=request.user,
 
-        address=address,
+#         address=address,
 
-        subtotal=totals["subtotal"],
+#         subtotal=totals["subtotal"],
 
-        discount_amount=totals["discount"],
+#         discount_amount=totals["discount"],
 
-        shipping_charge=totals["shipping"],
+#         shipping_charge=totals["shipping"],
 
-        total_amount=totals["total"],
+#         total_amount=totals["total"],
 
-        payment_status="Pending",
+#         payment_status="Pending",
 
-        status="Pending"
+#         status="Pending"
 
-    )
+#     )
 
-    for item in cart_items:
+#     for item in cart_items:
 
-        prices = get_product_prices(
+#         prices = get_product_prices(
 
-            item.variant_size.price,
+#             item.variant_size.price,
 
-            item.variant.product.offer,
+#             item.variant.product.offer,
 
-            item.quantity
+#             item.quantity
 
-        )
+#         )
 
-        OrderItem.objects.create(
+#         OrderItem.objects.create(
 
-            order=order,
+#             order=order,
 
-            product=item.variant.product,
+#             product=item.variant.product,
 
-            color=item.variant.color,
+#             color=item.variant.color,
 
-            size=item.variant_size.size,
+#             size=item.variant_size.size,
 
-            variant_size=item.variant_size,
+#             variant_size=item.variant_size,
 
-            quantity=item.quantity,
+#             quantity=item.quantity,
 
-            original_price=prices["original_price"],
+#             original_price=prices["original_price"],
 
-            discount_amount=prices["discount_amount"],
+#             discount_amount=prices["discount_amount"],
 
-            price=prices["discounted_price"],
+#             price=prices["discounted_price"],
 
-            total_price=prices["item_total"]
+#             total_price=prices["item_total"]
 
-        )
+#         )
 
-        item.variant_size.stock -= item.quantity
+#         item.variant_size.stock -= item.quantity
 
-        item.variant_size.save()
+#         item.variant_size.save()
 
-    cart_items.delete()
+#     cart_items.delete()
 
-    return Response(
+#     return Response(
 
-        {
+#         {
 
-            "message": "Order placed successfully",
+#             "message": "Order placed successfully",
 
-            "order_id": order.id,
+#             "order_id": order.id,
 
-            "subtotal": order.subtotal,
+#             "subtotal": order.subtotal,
 
-            "discount": order.discount_amount,
+#             "discount": order.discount_amount,
 
-            "shipping": order.shipping_charge,
+#             "shipping": order.shipping_charge,
 
-            "total_amount": order.total_amount
+#             "total_amount": order.total_amount
 
-        },
+#         },
 
-        status=status.HTTP_201_CREATED
+#         status=status.HTTP_201_CREATED
 
-    )
+#     )
     
     
 @api_view(["GET"])

@@ -30,7 +30,7 @@ urlpatterns = [
     path("offers/",views.get_offers),
     path( "offer-products/",views.offer_products),
     path("search-products/", views.search_products),
-    path("place-order/",views.place_order),
+    # path("place-order/",views.place_order),
     path("my-orders/",views.my_orders),
     path("cancel-order/<int:id>/",views.cancel_order),
     path( "order-details/<int:id>/",views.order_details),

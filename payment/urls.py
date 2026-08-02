@@ -12,4 +12,9 @@ urlpatterns = [
         payment_success,
         name="payment-success",
     ),
+      path(
+        "stripe-webhook/",
+        stripe_webhook,
+        name="stripe_webhook"
+    ),
 ]

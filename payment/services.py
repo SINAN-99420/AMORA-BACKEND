@@ -1,6 +1,7 @@
 import stripe
 from django.conf import settings
 
+
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
@@ -16,7 +17,9 @@ class StripeService:
 
         session = stripe.checkout.Session.create(
 
-            payment_method_types=["card"],
+            payment_method_types=[
+                "card"
+            ],
 
             mode="payment",
 
