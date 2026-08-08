@@ -325,19 +325,18 @@ def create_checkout_session(request):
 
         )
 
-    except Exception:
-
-        # Stripe session failed.
-        # Remove the pending order created for this attempt.
+    except Exception as e:
+        print("STRIPE ERROR =", e)
+        import traceback
+        traceback.print_exc()
 
         order.delete()
 
         return Response(
             {
-                "message":
-                    "Unable to start payment. Please try again."
+                "message": str(e)
             },
-            status=status.HTTP_502_BAD_GATEWAY
+            status=500
         )
 
 
