@@ -99,11 +99,8 @@ def create_checkout_session(request):
 
 
     original_subtotal = Decimal("0.00")
-
     discount_total = Decimal("0.00")
-
     discounted_subtotal = Decimal("0.00")
-
     line_items = []
 
 
@@ -143,40 +140,43 @@ def create_checkout_session(request):
 
 
         original_subtotal += (
-            original_price *
-            item.quantity
+            original_price * item.quantity
         )
 
 
         discount_total += (
-            discount_amount *
-            item.quantity
+            discount_amount * item.quantity
         )
 
 
         discounted_subtotal += (
-            discounted_price *
-            item.quantity
+            discounted_price * item.quantity
         )
 
 
         line_items.append(
             {
                 "price_data": {
-
                     "currency": "nzd",
 
                     "product_data": {
+                        "name": item.variant.product.name,
 
-                        "name":
-                            item.variant.product.name,
-
+                        # Save the product snapshot inside Stripe.
+                        # This lets the webhook create the Order only
+                        # after payment, without creating a Pending Order.
+                        "metadata": {
+                            "type": "product",
+                            "variant_size_id": str(item.variant_size_id),
+                            "original_price": str(original_price),
+                            "discount_amount": str(discount_amount),
+                            "discounted_price": str(discounted_price),
+                        },
                     },
 
                     "unit_amount": int(
                         discounted_price * 100
                     ),
-
                 },
 
                 "quantity": item.quantity,
@@ -198,19 +198,19 @@ def create_checkout_session(request):
         line_items.append(
             {
                 "price_data": {
-
                     "currency": "nzd",
 
                     "product_data": {
-
                         "name": "Shipping",
 
+                        "metadata": {
+                            "type": "shipping",
+                        },
                     },
 
                     "unit_amount": int(
                         totals["shipping"] * 100
                     ),
-
                 },
 
                 "quantity": 1,
@@ -219,83 +219,12 @@ def create_checkout_session(request):
 
 
     # =====================================================
-    # CREATE PENDING ORDER BEFORE STRIPE PAYMENT
-    # =====================================================
-
-    order = Order.objects.create(
-
-        user=request.user,
-
-        address=address,
-
-        subtotal=original_subtotal,
-
-        discount_amount=discount_total,
-
-        shipping_charge=totals["shipping"],
-
-        total_amount=totals["total"],
-
-        payment_status="Pending",
-
-        status="Pending",
-
-    )
-
-
-    # =====================================================
-    # SNAPSHOT CART INTO ORDER ITEMS
-    # =====================================================
-
-    for item in cart_items:
-
-        original_price = Decimal(
-            str(item.variant_size.price)
-        )
-
-
-        discounted_price = calculate_offer_price(
-            original_price,
-            item.variant.product.offer
-        )
-
-
-        discount_amount = calculate_discount_amount(
-            original_price,
-            item.variant.product.offer
-        )
-
-
-        OrderItem.objects.create(
-
-            order=order,
-
-            product=item.variant.product,
-
-            color=item.variant.color,
-
-            size=item.variant_size.size,
-
-            variant_size=item.variant_size,
-
-            quantity=item.quantity,
-
-            original_price=original_price,
-
-            discount_amount=discount_amount,
-
-            price=discounted_price,
-
-            total_price=(
-                discounted_price *
-                item.quantity
-            ),
-
-        )
-
-
-    # =====================================================
     # CREATE STRIPE SESSION
+    #
+    # IMPORTANT:
+    # No Order / OrderItem is created here.
+    # The Order will be created only after Stripe confirms
+    # that the payment is successful.
     # =====================================================
 
     try:
@@ -314,13 +243,8 @@ def create_checkout_session(request):
             ),
 
             metadata={
-
-                "user_id":
-                    str(request.user.id),
-
-                "order_id":
-                    str(order.id),
-
+                "user_id": str(request.user.id),
+                "address_id": str(address.id),
             }
 
         )
@@ -330,27 +254,12 @@ def create_checkout_session(request):
         import traceback
         traceback.print_exc()
 
-        order.delete()
-
         return Response(
             {
                 "message": str(e)
             },
             status=500
         )
-
-
-    # =====================================================
-    # SAVE STRIPE SESSION ID
-    # =====================================================
-
-    order.stripe_session_id = session.id
-
-    order.save(
-        update_fields=[
-            "stripe_session_id"
-        ]
-    )
 
 
     return Response(
@@ -367,60 +276,8 @@ def create_checkout_session(request):
 @transaction.atomic
 def fulfill_paid_order(session):
 
-    # Stripe metadata contains our Order ID
-
-    order_id = session.metadata.get(
-        "order_id"
-    )
-
-
-    if not order_id:
-
-        raise ValueError(
-            "Order ID missing from Stripe metadata"
-        )
-
-
-    # Lock the order so webhook retries / success page
-    # cannot process it simultaneously.
-
-    order = (
-        Order.objects
-        .select_for_update()
-        .get(
-            id=order_id
-        )
-    )
-
-
     # =====================================================
-    # SECURITY CHECK
-    # Stripe session must belong to this exact order.
-    # =====================================================
-
-    if (
-        order.stripe_session_id
-        and
-        order.stripe_session_id != session.id
-    ):
-
-        raise ValueError(
-            "Stripe session does not match order"
-        )
-
-
-    # =====================================================
-    # IDEMPOTENCY
-    # Already fulfilled -> do nothing.
-    # =====================================================
-
-    if order.payment_status == "Paid":
-
-        return order
-
-
-    # =====================================================
-    # VERIFY STRIPE PAYMENT
+    # VERIFY PAYMENT FIRST
     # =====================================================
 
     if session.payment_status != "paid":
@@ -430,12 +287,203 @@ def fulfill_paid_order(session):
         )
 
 
+    user_id = session.metadata.get("user_id")
+    address_id = session.metadata.get("address_id")
+
+
+    if not user_id:
+
+        raise ValueError(
+            "User ID missing from Stripe metadata"
+        )
+
+
+    if not address_id:
+
+        raise ValueError(
+            "Address ID missing from Stripe metadata"
+        )
+
+
+    try:
+
+        user_id = int(user_id)
+        address_id = int(address_id)
+
+    except (TypeError, ValueError):
+
+        raise ValueError(
+            "Invalid user or address ID"
+        )
+
+
     # =====================================================
-    # VERIFY STRIPE AMOUNT
+    # IDEMPOTENCY
+    #
+    # Webhook and payment-success API can both reach this
+    # function. If this Stripe session already created an
+    # order, return it instead of creating a duplicate.
     # =====================================================
 
+    existing_order = (
+        Order.objects
+        .filter(stripe_session_id=session.id)
+        .first()
+    )
+
+    if existing_order:
+
+        return existing_order
+
+
+    # =====================================================
+    # VERIFY CURRENCY
+    # =====================================================
+
+    if not session.currency:
+
+        raise ValueError(
+            "Payment currency missing"
+        )
+
+
+    if session.currency.lower() != "nzd":
+
+        raise ValueError(
+            "Invalid payment currency"
+        )
+
+
+    # =====================================================
+    # GET STRIPE LINE ITEMS
+    #
+    # We use the Stripe Checkout line items as the payment
+    # snapshot. This avoids depending on the user's cart after
+    # payment.
+    # =====================================================
+
+    stripe_line_items = stripe.checkout.Session.list_line_items(
+        session.id,
+        limit=100,
+        expand=["data.price.product"],
+    )
+
+
+    product_snapshots = []
+    shipping_charge = Decimal("0.00")
+
+
+    for line_item in stripe_line_items.data:
+
+        product = line_item.price.product
+
+        if not product:
+
+            raise ValueError(
+                "Stripe product information is missing"
+            )
+
+        metadata = product.metadata or {}
+        item_type = metadata.get("type")
+
+
+        if item_type == "shipping":
+
+            shipping_charge += (
+                Decimal(line_item.amount_total or 0) /
+                Decimal("100")
+            )
+
+            continue
+
+
+        if item_type != "product":
+
+            raise ValueError(
+                "Invalid Stripe line item"
+            )
+
+
+        variant_size_id = metadata.get(
+            "variant_size_id"
+        )
+
+        if not variant_size_id:
+
+            raise ValueError(
+                "Variant size missing from Stripe line item"
+            )
+
+
+        quantity = int(line_item.quantity or 0)
+
+        if quantity <= 0:
+
+            raise ValueError(
+                "Invalid product quantity"
+            )
+
+
+        product_snapshots.append(
+            {
+                "variant_size_id": int(variant_size_id),
+                "quantity": quantity,
+                "original_price": Decimal(
+                    metadata.get("original_price", "0")
+                ),
+                "discount_amount": Decimal(
+                    metadata.get("discount_amount", "0")
+                ),
+                "price": Decimal(
+                    metadata.get("discounted_price", "0")
+                ),
+            }
+        )
+
+
+    if not product_snapshots:
+
+        raise ValueError(
+            "No products found in Stripe session"
+        )
+
+
+    # =====================================================
+    # VERIFY TOTAL AMOUNT
+    # =====================================================
+
+    expected_total = Decimal("0.00")
+    original_subtotal = Decimal("0.00")
+    discount_total = Decimal("0.00")
+    discounted_subtotal = Decimal("0.00")
+
+
+    for snapshot in product_snapshots:
+
+        quantity = snapshot["quantity"]
+        original_price = snapshot["original_price"]
+        discount_amount = snapshot["discount_amount"]
+        price = snapshot["price"]
+
+        original_subtotal += (
+            original_price * quantity
+        )
+
+        discount_total += (
+            discount_amount * quantity
+        )
+
+        discounted_subtotal += (
+            price * quantity
+        )
+
+
+    expected_total = (
+        discounted_subtotal + shipping_charge
+    )
+
     expected_amount = int(
-        order.total_amount * 100
+        expected_total * 100
     )
 
 
@@ -447,27 +495,20 @@ def fulfill_paid_order(session):
 
 
     # =====================================================
-    # VERIFY CURRENCY
+    # GET ADDRESS
     # =====================================================
 
-    if session.currency.lower() != "nzd":
+    try:
 
-        raise ValueError(
-            "Invalid payment currency"
+        address = Address.objects.get(
+            id=address_id,
+            user_id=user_id
         )
 
-
-    order_items = list(
-        order.items.select_related(
-            "variant_size"
-        )
-    )
-
-
-    if not order_items:
+    except Address.DoesNotExist:
 
         raise ValueError(
-            "Order has no items"
+            "Address not found"
         )
 
 
@@ -476,28 +517,26 @@ def fulfill_paid_order(session):
     # =====================================================
 
     variant_size_ids = [
-
-        item.variant_size_id
-
-        for item in order_items
-
-        if item.variant_size_id
-
+        snapshot["variant_size_id"]
+        for snapshot in product_snapshots
     ]
 
 
     locked_sizes = {
-
         variant_size.id: variant_size
-
         for variant_size in (
             ProductVariantSize.objects
             .select_for_update()
+            .select_related(
+                "variant",
+                "variant__product",
+                "variant__color",
+                "size",
+            )
             .filter(
                 id__in=variant_size_ids
             )
         )
-
     }
 
 
@@ -505,19 +544,11 @@ def fulfill_paid_order(session):
     # CHECK STOCK AGAIN
     # =====================================================
 
-    for item in order_items:
-
-        if not item.variant_size_id:
-
-            raise ValueError(
-                "Variant size missing from order item"
-            )
-
+    for snapshot in product_snapshots:
 
         variant_size = locked_sizes.get(
-            item.variant_size_id
+            snapshot["variant_size_id"]
         )
-
 
         if not variant_size:
 
@@ -526,29 +557,92 @@ def fulfill_paid_order(session):
             )
 
 
-        if variant_size.stock < item.quantity:
+        if variant_size.stock < snapshot["quantity"]:
 
             raise ValueError(
                 f"Insufficient stock for "
-                f"{item.product.name}"
+                f"{variant_size.variant.product.name}"
             )
+
+
+    # =====================================================
+    # CREATE PAID ORDER
+    #
+    # This is the first time Order is created.
+    # =====================================================
+
+    order = Order.objects.create(
+
+        user_id=user_id,
+
+        address=address,
+
+        subtotal=original_subtotal,
+
+        discount_amount=discount_total,
+
+        shipping_charge=shipping_charge,
+
+        total_amount=expected_total,
+
+        payment_status="Paid",
+
+        status="Processing",
+
+        stripe_session_id=session.id,
+
+    )
+
+
+    # =====================================================
+    # CREATE ORDER ITEMS
+    # =====================================================
+
+    for snapshot in product_snapshots:
+
+        variant_size = locked_sizes[
+            snapshot["variant_size_id"]
+        ]
+
+        OrderItem.objects.create(
+
+            order=order,
+
+            product=variant_size.variant.product,
+
+            color=variant_size.variant.color,
+
+            size=variant_size.size,
+
+            variant_size=variant_size,
+
+            quantity=snapshot["quantity"],
+
+            original_price=snapshot["original_price"],
+
+            discount_amount=snapshot["discount_amount"],
+
+            price=snapshot["price"],
+
+            total_price=(
+                snapshot["price"] *
+                snapshot["quantity"]
+            ),
+
+        )
 
 
     # =====================================================
     # REDUCE STOCK
     # =====================================================
 
-    for item in order_items:
+    for snapshot in product_snapshots:
 
         variant_size = locked_sizes[
-            item.variant_size_id
+            snapshot["variant_size_id"]
         ]
 
-
-        variant_size.stock -= (
-            item.quantity
-        )
-
+        variant_size.stock -= snapshot["quantity"]
 
         variant_size.save(
             update_fields=[
@@ -558,38 +652,14 @@ def fulfill_paid_order(session):
 
 
     # =====================================================
-    # MARK ORDER PAID
+    # REMOVE ONLY PURCHASED ITEMS FROM CART
     # =====================================================
 
-    order.payment_status = "Paid"
-
-    order.status = "Processing"
-
-    order.save(
-        update_fields=[
-            "payment_status",
-            "status",
-        ]
-    )
-
-
-    # =====================================================
-    # REMOVE PURCHASED ITEMS FROM CART
-    #
-    # Do NOT delete the user's whole cart.
-    # If they added something after opening Stripe,
-    # that new cart item should remain.
-    # =====================================================
-
-    for item in order_items:
+    for snapshot in product_snapshots:
 
         Cart.objects.filter(
-
-            user=order.user,
-
-            variant_size_id=
-                item.variant_size_id,
-
+            user_id=user_id,
+            variant_size_id=snapshot["variant_size_id"],
         ).delete()
 
 
@@ -614,7 +684,7 @@ def payment_success(request):
         return Response(
             {
                 "message":
-                    "Session ID is required"
+                "Session ID is required"
             },
             status=status.HTTP_400_BAD_REQUEST
         )
@@ -633,21 +703,18 @@ def payment_success(request):
         return Response(
             {
                 "message":
-                    "Invalid payment session"
+                "Invalid payment session"
             },
             status=status.HTTP_400_BAD_REQUEST
         )
 
 
     # =====================================================
-    # IMPORTANT:
-    # Logged-in user must own this Stripe session.
+    # LOGGED-IN USER MUST OWN THIS STRIPE SESSION
     # =====================================================
 
-    session_user_id = (
-        session.metadata.get(
-            "user_id"
-        )
+    session_user_id = session.metadata.get(
+        "user_id"
     )
 
 
@@ -661,7 +728,7 @@ def payment_success(request):
         return Response(
             {
                 "message":
-                    "Unauthorized payment session"
+                "Unauthorized payment session"
             },
             status=status.HTTP_403_FORBIDDEN
         )
@@ -672,7 +739,7 @@ def payment_success(request):
         return Response(
             {
                 "message":
-                    "Payment has not been completed"
+                "Payment has not been completed"
             },
             status=status.HTTP_400_BAD_REQUEST
         )
@@ -680,18 +747,10 @@ def payment_success(request):
 
     try:
 
+        # The webhook may already have created the order.
+        # If not, this safely creates it after verifying payment.
         order = fulfill_paid_order(
             session
-        )
-
-    except Order.DoesNotExist:
-
-        return Response(
-            {
-                "message":
-                    "Order not found"
-            },
-            status=status.HTTP_404_NOT_FOUND
         )
 
     except ValueError as error:
@@ -699,7 +758,7 @@ def payment_success(request):
         return Response(
             {
                 "message":
-                    str(error)
+                str(error)
             },
             status=status.HTTP_400_BAD_REQUEST
         )
@@ -709,8 +768,8 @@ def payment_success(request):
         return Response(
             {
                 "message":
-                    "Payment was received but order processing failed. "
-                    "Please contact support."
+                "Payment was received but order processing failed. "
+                "Please contact support."
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
@@ -719,10 +778,10 @@ def payment_success(request):
     return Response(
         {
             "message":
-                "Payment successful",
+            "Payment successful",
 
             "order_id":
-                order.id,
+            order.id,
         }
     )
 
@@ -793,8 +852,6 @@ def stripe_webhook(request):
         session = event["data"]["object"]
 
 
-        # Only fulfill when Stripe says it is actually paid.
-
         if session.get(
             "payment_status"
         ) == "paid":
@@ -817,8 +874,6 @@ def stripe_webhook(request):
 
     # =====================================================
     # ASYNC PAYMENT SUCCESS
-    # Useful if additional delayed payment methods
-    # are enabled later.
     # =====================================================
 
     elif (
@@ -846,3 +901,4 @@ def stripe_webhook(request):
     return HttpResponse(
         status=200
     )
+
